@@ -282,218 +282,280 @@
     firebase.initializeApp(firebaseConfig);
     const database = firebase.database();
     
-    // Firebase references
+    // Database references
     const currentRef = database.ref('/FYP/LiveCurrent');
     const statusRef = database.ref('/FYP/Status');
     const timestampRef = database.ref('/FYP/Timestamp');
     const peakRef = database.ref('/FYP/PeakCurrent');
     const connectedRef = database.ref('.info/connected');
+
+    // ============================================================
+    // GLOBAL STATE & UI ELEMENTS
+    // ============================================================
+    let isListenerActive = false;
+    let reconnectAttempts = 0;
+    let currentChart, chartData = [];
+    let statusElement, currentElement, gaugeFillElement, gaugeValueElement, deviceStatusElement, heartbeatStatusElement, wifiStatusElement, firebaseStatusElement, lastUpdateElement, pointCountElement, peakCurrentElement;
+
+    // Wait for DOM to be fully loaded before accessing elements
+    document.addEventListener('DOMContentLoaded', () => {
+        // Initialize UI element references
+        statusElement = document.getElementById('status');
+        currentElement = document.getElementById('current');
+        gaugeFillElement = document.getElementById('gaugeFill');
+        gaugeValueElement = document.getElementById('gaugeValue');
+        deviceStatusElement = document.getElementById('deviceStatus');
+        heartbeatStatusElement = document.getElementById('heartbeatStatus');
+        wifiStatusElement = document.getElementById('wifiStatus');
+        firebaseStatusElement = document.getElementById('firebaseStatus');
+        lastUpdateElement = document.getElementById('lastUpdate');
+        pointCountElement = document.getElementById('pointCount');
+        peakCurrentElement = document.getElementById('peakCurrent');
+
+        // Initialize the chart
+        initChart();
+        
+        // Setup the real-time listener
+        setupRealtimeListener();
+        
+        // Set up periodic connection checks
+        setInterval(checkConnectionHealth, 30000);
+        setInterval(updateHeartbeatDisplay, 5000);
+        
+        // Setup manual refresh button
+        addManualRefreshButton();
+    });
     
     // ============================================================
     // CHART SETUP
     // ============================================================
-    const ctx = document.getElementById('currentChart').getContext('2d');
-    let chartData = [];
-    let lastHeartbeatTime = Date.now();
-    
-    const currentChart = new Chart(ctx, {
-        type: 'line',
-        data: {
-            labels: [],
-            datasets: [{
-                label: 'Live Current (mA)',
-                data: [],
-                borderColor: '#00b894',
-                backgroundColor: 'rgba(0,184,148,0.1)',
-                borderWidth: 2,
-                pointRadius: 4,
-                pointBackgroundColor: '#00b894',
-                tension: 0.2,
-                fill: true
-            }]
-        },
-        options: {
-            responsive: true,
-            maintainAspectRatio: true,
-            plugins: {
-                legend: { labels: { color: '#ccc' } },
-                tooltip: { callbacks: { label: (ctx) => `${ctx.raw.toFixed(2)} mA` } }
+    function initChart() {
+        const ctx = document.getElementById('currentChart').getContext('2d');
+        // Initialize with 20 zero values for a baseline
+        for (let i = 0; i < 20; i++) chartData.push(0.00);
+        
+        currentChart = new Chart(ctx, {
+            type: 'line',
+            data: {
+                labels: chartData.map((_, i) => `#${i+1}`),
+                datasets: [{
+                    label: 'Live Current (mA)',
+                    data: [...chartData],
+                    borderColor: '#00b894',
+                    backgroundColor: 'rgba(0,184,148,0.1)',
+                    borderWidth: 2,
+                    pointRadius: 4,
+                    pointBackgroundColor: '#00b894',
+                    tension: 0.2,
+                    fill: true
+                }]
             },
-            scales: {
-                y: { 
-                    title: { display: true, text: 'Current (mA)', color: '#aaa' }, 
-                    grid: { color: '#333' }, 
-                    ticks: { color: '#ccc', stepSize: 10, min: 0, max: 100 }
-                },
-                x: { 
-                    title: { display: true, text: 'Readings (Most Recent →)', color: '#aaa' }, 
-                    grid: { display: false }, 
-                    ticks: { color: '#aaa' }
-                }
-            },
-            elements: {
-                point: {
-                    radius: 4,
-                    hoverRadius: 6
+            options: {
+                responsive: true,
+                maintainAspectRatio: true,
+                plugins: { legend: { labels: { color: '#ccc' } }, tooltip: { callbacks: { label: (ctx) => `${ctx.raw.toFixed(2)} mA` } } },
+                scales: {
+                    y: { title: { display: true, text: 'Current (mA)', color: '#aaa' }, grid: { color: '#333' }, ticks: { color: '#ccc', stepSize: 10, min: 0, max: 100 } },
+                    x: { title: { display: true, text: 'Readings (Most Recent →)', color: '#aaa' }, grid: { display: false }, ticks: { color: '#aaa' } }
                 }
             }
-        }
-    });
-    
-    // Initialize chart with 20 zero points to show the line
-    for (let i = 0; i < 20; i++) {
-        chartData.push(0.00);
+        });
+        if(pointCountElement) pointCountElement.innerText = chartData.length;
     }
-    const initLabels = chartData.map((_, i) => `#${i+1}`);
-    currentChart.data.labels = initLabels;
-    currentChart.data.datasets[0].data = [...chartData];
-    currentChart.update();
-    document.getElementById('pointCount').innerText = chartData.length;
     
     function updateChart(currentValue) {
-        if (isNaN(currentValue) || currentValue === null) return;
-        
-        // Add new reading
+        if (isNaN(currentValue) || currentValue === null || !currentChart) return;
         chartData.push(currentValue);
-        
-        // Keep only last 20 readings
         while (chartData.length > 20) chartData.shift();
         
-        // Update labels
-        const chartLabels = chartData.map((_, i) => `#${i+1}`);
-        currentChart.data.labels = chartLabels;
+        currentChart.data.labels = chartData.map((_, i) => `#${i+1}`);
         currentChart.data.datasets[0].data = [...chartData];
         currentChart.update();
-        
-        document.getElementById('pointCount').innerText = chartData.length;
+        if(pointCountElement) pointCountElement.innerText = chartData.length;
     }
     
     // ============================================================
-    // HEARTBEAT SIMULATION (Dashboard detects data freshness)
+    // CORE FUNCTION: SETUP A SELF-HEALING LISTENER
     // ============================================================
-    function updateHeartbeat() {
-        const now = Date.now();
-        const timeSinceLastData = now - lastHeartbeatTime;
-        const heartbeatElement = document.getElementById('heartbeatStatus');
+    function setupRealtimeListener() {
+        if (isListenerActive) return;
+        isListenerActive = true;
         
-        if (timeSinceLastData < 10000) {
-            heartbeatElement.innerHTML = '<span class="check-pass">● Active (Data flowing)</span>';
-        } else if (timeSinceLastData < 60000) {
-            heartbeatElement.innerHTML = '<span class="check-fail">◐ Data stale (' + Math.round(timeSinceLastData/1000) + 's ago)</span>';
-        } else {
-            heartbeatElement.innerHTML = '<span class="check-fail">○ No data for ' + Math.round(timeSinceLastData/1000) + 's</span>';
-        }
+        // Monitor Firebase connection state
+        connectedRef.on('value', (snap) => {
+            const isConnected = snap.val() === true;
+            if (deviceStatusElement) deviceStatusElement.innerHTML = isConnected ? '<span class="online">● Online</span>' : '<span class="offline">○ Offline</span>';
+            if (firebaseStatusElement) firebaseStatusElement.innerHTML = isConnected ? '<span class="check-pass">● Connected</span>' : '<span class="check-fail">○ Disconnected</span>';
+            if (wifiStatusElement) wifiStatusElement.innerHTML = isConnected ? '<span class="check-pass">● Connected to network</span>' : '<span class="check-fail">○ Waiting for ESP32</span>';
+            
+            // Try to re-setup the listener if we get disconnected and reconnected
+            if (!isConnected) {
+                console.warn("Firebase connection lost. Listener will re-attach on reconnect.");
+                if (heartbeatStatusElement) heartbeatStatusElement.innerHTML = '<span class="check-fail">◐ Connection lost, reconnecting...</span>';
+            } else {
+                if (heartbeatStatusElement) heartbeatStatusElement.innerHTML = '<span class="check-pass">● Active (Data flowing)</span>';
+                // Clear any reconnection attempts counter on successful connection
+                reconnectAttempts = 0;
+            }
+        });
+        
+        // Listen for changes to the current value
+        // This listener will stay active as long as the connection is alive
+        currentRef.on('value', (snapshot) => {
+            const current = snapshot.val();
+            if (current !== null && typeof current === 'number') {
+                // Fetch the latest status and peak values to update the display
+                Promise.all([
+                    statusRef.once('value').then(s => s.val()),
+                    peakRef.once('value').then(s => s.val())
+                ]).then(([status, peak]) => {
+                    updateDashboardDisplay(current, status, peak);
+                }).catch(err => console.error("Error fetching additional data:", err));
+            }
+        }, (error) => {
+            console.error("Firebase listener error:", error);
+            isListenerActive = false;
+            if (heartbeatStatusElement) heartbeatStatusElement.innerHTML = '<span class="check-fail">❌ Listener error, reconnecting...</span>';
+            // Attempt to reconnect after a delay
+            setTimeout(() => {
+                if (!isListenerActive) setupRealtimeListener();
+            }, 5000);
+        });
+        
+        console.log("✅ Realtime listener established");
     }
     
-    function updateWifiStatus() {
-        const wifiElement = document.getElementById('wifiStatus');
-        const connectionElement = document.getElementById('deviceStatus');
-        
-        if (connectionElement.innerHTML.includes('Online')) {
-            wifiElement.innerHTML = '<span class="check-pass">● Connected to network</span>';
-        } else {
-            wifiElement.innerHTML = '<span class="check-fail">○ Waiting for ESP32</span>';
-        }
-    }
-    
-    function updateDisplay(current, status, peak) {
+    // ============================================================
+    // DASHBOARD UPDATE FUNCTION
+    // ============================================================
+    let lastHeartbeatTime = Date.now();
+    function updateDashboardDisplay(current, status, peak) {
         // Update current value
-        document.getElementById('current').innerHTML = current.toFixed(2);
+        if(currentElement) currentElement.innerHTML = current.toFixed(2);
         
         // Update peak display
-        if (peak && peak > 0) {
-            document.getElementById('peakCurrent').innerHTML = peak.toFixed(2) + ' mA';
-        }
+        if(peak && peak > 0 && peakCurrentElement) peakCurrentElement.innerHTML = peak.toFixed(2) + ' mA';
         
-        // Update status
-        const statusElement = document.getElementById('status');
+        // Determine status and update UI
         let statusClass = 'status-safe';
         let displayStatus = 'SAFE';
+        const liveBadge = document.getElementById('liveBadge');
         
         if (status === 'CRITICAL' || current >= 60) {
             displayStatus = 'CRITICAL - FLASHOVER';
             statusClass = 'status-critical';
-            document.getElementById('liveBadge').innerHTML = '⚠️ CRITICAL';
-            document.getElementById('liveBadge').className = 'badge badge-warning';
+            if(liveBadge) { liveBadge.innerHTML = '⚠️ CRITICAL'; liveBadge.className = 'badge badge-warning'; }
         } else if (status === 'WARNING' || current >= 20) {
             displayStatus = 'WARNING - ARCING';
             statusClass = 'status-warning';
-            document.getElementById('liveBadge').innerHTML = '⚠️ WARNING';
-            document.getElementById('liveBadge').className = 'badge badge-warning';
+            if(liveBadge) { liveBadge.innerHTML = '⚠️ WARNING'; liveBadge.className = 'badge badge-warning'; }
         } else {
             displayStatus = 'SAFE';
             statusClass = 'status-safe';
-            document.getElementById('liveBadge').innerHTML = 'LIVE';
-            document.getElementById('liveBadge').className = 'badge';
+            if(liveBadge) { liveBadge.innerHTML = 'LIVE'; liveBadge.className = 'badge'; }
         }
         
-        statusElement.innerHTML = displayStatus;
-        statusElement.className = `status-value ${statusClass}`;
+        if(statusElement) { statusElement.innerHTML = displayStatus; statusElement.className = `status-value ${statusClass}`; }
         
         // Update gauge
         let percent = Math.min(100, Math.max(0, (current / 100) * 100));
-        document.getElementById('gaugeFill').style.height = percent + '%';
-        document.getElementById('gaugeValue').innerHTML = Math.round(percent) + '%';
+        if(gaugeFillElement) gaugeFillElement.style.height = percent + '%';
+        if(gaugeValueElement) gaugeValueElement.innerHTML = Math.round(percent) + '%';
         
-        // Update timestamp
+        // Update timestamp and last update message
         const now = new Date();
-        document.getElementById('timestamp').innerHTML = now.toLocaleString();
-        document.getElementById('lastUpdate').innerHTML = `📡 Last update: ${now.toLocaleTimeString()} | Live from Firebase`;
+        const timestampElement = document.getElementById('timestamp');
+        if(timestampElement) timestampElement.innerHTML = now.toLocaleString();
+        if(lastUpdateElement) lastUpdateElement.innerHTML = `📡 Last update: ${now.toLocaleTimeString()} | Live from Firebase`;
         
         // Update heartbeat
         lastHeartbeatTime = now;
-        updateHeartbeat();
+        if(heartbeatStatusElement) heartbeatStatusElement.innerHTML = '<span class="check-pass">● Active (Data flowing)</span>';
         
         // Update chart
         updateChart(current);
     }
     
     // ============================================================
-    // FIREBASE LISTENERS
+    // MANUAL DATA REFRESH FUNCTION
     // ============================================================
+    function manualRefresh() {
+        if(!currentRef) return;
+        
+        const refreshBtn = document.getElementById('manualRefreshBtn');
+        if(refreshBtn) { refreshBtn.disabled = true; refreshBtn.textContent = 'Refreshing...'; }
+        
+        Promise.all([
+            currentRef.once('value').then(s => s.val()),
+            statusRef.once('value').then(s => s.val()),
+            peakRef.once('value').then(s => s.val())
+        ]).then(([current, status, peak]) => {
+            if(current !== null && typeof current === 'number') {
+                updateDashboardDisplay(current, status, peak);
+                if(lastUpdateElement) lastUpdateElement.innerHTML = `📡 Manual refresh at ${new Date().toLocaleTimeString()}`;
+                console.log("Manual refresh successful:", {current, status, peak});
+            } else {
+                console.warn("Manual refresh: No data available");
+                if(lastUpdateElement) lastUpdateElement.innerHTML = `⚠️ Manual refresh: No data available. Check ESP32.`;
+            }
+        }).catch(err => {
+            console.error("Manual refresh error:", err);
+            if(lastUpdateElement) lastUpdateElement.innerHTML = `❌ Manual refresh failed: ${err.message}`;
+        }).finally(() => {
+            if(refreshBtn) { refreshBtn.disabled = false; refreshBtn.textContent = '🔄 Refresh Now'; }
+        });
+    }
     
-    connectedRef.on('value', (snap) => {
-        const deviceStatus = document.getElementById('deviceStatus');
-        const firebaseStatus = document.getElementById('firebaseStatus');
-        if (snap.val() === true) {
-            deviceStatus.innerHTML = '<span class="online">● Online</span>';
-            firebaseStatus.innerHTML = '<span class="check-pass">● Connected</span>';
+    function addManualRefreshButton() {
+        const container = document.querySelector('.container');
+        if(!container) return;
+        
+        let existingBtn = document.getElementById('manualRefreshBtn');
+        if(existingBtn) existingBtn.remove();
+        
+        const buttonDiv = document.createElement('div');
+        buttonDiv.style.textAlign = 'center';
+        buttonDiv.style.margin = '20px 0';
+        buttonDiv.innerHTML = `<button id="manualRefreshBtn" style="background: #00b894; color: white; border: none; padding: 12px 24px; border-radius: 8px; cursor: pointer; font-size: 16px; transition: all 0.3s;">🔄 Refresh Now</button>`;
+        
+        const lastUpdateDiv = document.querySelector('.last-update');
+        if(lastUpdateDiv) {
+            container.insertBefore(buttonDiv, lastUpdateDiv);
         } else {
-            deviceStatus.innerHTML = '<span class="offline">○ Offline</span>';
-            firebaseStatus.innerHTML = '<span class="check-fail">○ Disconnected</span>';
+            container.appendChild(buttonDiv);
         }
-        updateWifiStatus();
-    });
+        
+        const btn = document.getElementById('manualRefreshBtn');
+        if(btn) btn.addEventListener('click', manualRefresh);
+    }
     
-    currentRef.on('value', (snapshot) => {
-        const current = snapshot.val();
-        if (current !== null && typeof current === 'number') {
-            statusRef.once('value', (statusSnap) => {
-                const status = statusSnap.val();
-                peakRef.once('value', (peakSnap) => {
-                    updateDisplay(current, status, peakSnap.val());
-                });
-            });
+    function checkConnectionHealth() {
+        if(!currentRef) return;
+        currentRef.once('value').then(snapshot => {
+            const hasData = snapshot.exists();
+            if(!hasData && heartbeatStatusElement) heartbeatStatusElement.innerHTML = '<span class="check-fail">⚠️ No data in database</span>';
+        }).catch(err => {
+            console.warn("Health check failed:", err);
+            if(heartbeatStatusElement) heartbeatStatusElement.innerHTML = '<span class="check-fail">⚠️ Connection issue detected</span>';
+            if(!isListenerActive) setupRealtimeListener();
+        });
+    }
+    
+    function updateHeartbeatDisplay() {
+        const now = Date.now();
+        const timeSinceLastData = now - lastHeartbeatTime;
+        
+        if(!heartbeatStatusElement) return;
+        if (timeSinceLastData < 10000) {
+            heartbeatStatusElement.innerHTML = '<span class="check-pass">● Active (Data flowing)</span>';
+        } else if (timeSinceLastData < 60000) {
+            heartbeatStatusElement.innerHTML = `<span class="check-fail">◐ Data stale (${Math.round(timeSinceLastData/1000)}s ago)</span>`;
+        } else {
+            heartbeatStatusElement.innerHTML = `<span class="check-fail">○ No data for ${Math.round(timeSinceLastData/1000)}s</span>`;
         }
-    });
+    }
     
-    peakRef.on('value', (snapshot) => {
-        const peak = snapshot.val();
-        if (peak !== null && typeof peak === 'number') {
-            document.getElementById('peakCurrent').innerHTML = peak.toFixed(2) + ' mA';
-        }
-    });
-    
-    setInterval(updateHeartbeat, 5000);
-    setInterval(updateWifiStatus, 10000);
-    
-    setTimeout(() => {
-        if (document.getElementById('lastUpdate').innerHTML.includes('Waiting')) {
-            document.getElementById('lastUpdate').innerHTML = "⚠️ Waiting for ESP32 data... Check if your ESP32 is powered and connected to WiFi.";
-        }
-    }, 8000);
-    
-    console.log("✅ Dashboard ready - Chart initialized with 20 points");
+    console.log("✅ Dashboard ready - Resilient real-time listener active");
 </script>
 </body>
 </html>
