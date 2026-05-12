@@ -306,7 +306,7 @@
                 borderColor: '#00b894',
                 backgroundColor: 'rgba(0,184,148,0.1)',
                 borderWidth: 2,
-                pointRadius: 3,
+                pointRadius: 4,
                 pointBackgroundColor: '#00b894',
                 tension: 0.2,
                 fill: true
@@ -320,17 +320,46 @@
                 tooltip: { callbacks: { label: (ctx) => `${ctx.raw.toFixed(2)} mA` } }
             },
             scales: {
-                y: { title: { display: true, text: 'Current (mA)', color: '#aaa' }, grid: { color: '#333' }, ticks: { color: '#ccc' } },
-                x: { title: { display: true, text: 'Readings (Most Recent →)', color: '#aaa' }, grid: { display: false }, ticks: { color: '#aaa' } }
+                y: { 
+                    title: { display: true, text: 'Current (mA)', color: '#aaa' }, 
+                    grid: { color: '#333' }, 
+                    ticks: { color: '#ccc', stepSize: 10, min: 0, max: 100 }
+                },
+                x: { 
+                    title: { display: true, text: 'Readings (Most Recent →)', color: '#aaa' }, 
+                    grid: { display: false }, 
+                    ticks: { color: '#aaa' }
+                }
+            },
+            elements: {
+                point: {
+                    radius: 4,
+                    hoverRadius: 6
+                }
             }
         }
     });
     
+    // Initialize chart with 20 zero points to show the line
+    for (let i = 0; i < 20; i++) {
+        chartData.push(0.00);
+    }
+    const initLabels = chartData.map((_, i) => `#${i+1}`);
+    currentChart.data.labels = initLabels;
+    currentChart.data.datasets[0].data = [...chartData];
+    currentChart.update();
+    document.getElementById('pointCount').innerText = chartData.length;
+    
     function updateChart(currentValue) {
         if (isNaN(currentValue) || currentValue === null) return;
+        
+        // Add new reading
         chartData.push(currentValue);
+        
+        // Keep only last 20 readings
         while (chartData.length > 20) chartData.shift();
         
+        // Update labels
         const chartLabels = chartData.map((_, i) => `#${i+1}`);
         currentChart.data.labels = chartLabels;
         currentChart.data.datasets[0].data = [...chartData];
@@ -357,7 +386,6 @@
     }
     
     function updateWifiStatus() {
-        // WiFi status is inferred from Firebase connection
         const wifiElement = document.getElementById('wifiStatus');
         const connectionElement = document.getElementById('deviceStatus');
         
@@ -424,7 +452,6 @@
     // FIREBASE LISTENERS
     // ============================================================
     
-    // Monitor Firebase connection (inferred WiFi health)
     connectedRef.on('value', (snap) => {
         const deviceStatus = document.getElementById('deviceStatus');
         const firebaseStatus = document.getElementById('firebaseStatus');
@@ -438,11 +465,9 @@
         updateWifiStatus();
     });
     
-    // Listen for current updates
     currentRef.on('value', (snapshot) => {
         const current = snapshot.val();
         if (current !== null && typeof current === 'number') {
-            // Get status and peak to update display
             statusRef.once('value', (statusSnap) => {
                 const status = statusSnap.val();
                 peakRef.once('value', (peakSnap) => {
@@ -452,7 +477,6 @@
         }
     });
     
-    // Listen for peak updates
     peakRef.on('value', (snapshot) => {
         const peak = snapshot.val();
         if (peak !== null && typeof peak === 'number') {
@@ -460,18 +484,16 @@
         }
     });
     
-    // Initial heartbeat update
     setInterval(updateHeartbeat, 5000);
     setInterval(updateWifiStatus, 10000);
     
-    // Fallback timeout
     setTimeout(() => {
         if (document.getElementById('lastUpdate').innerHTML.includes('Waiting')) {
             document.getElementById('lastUpdate').innerHTML = "⚠️ Waiting for ESP32 data... Check if your ESP32 is powered and connected to WiFi.";
         }
     }, 8000);
     
-    console.log("✅ Dashboard ready - System Health & WiFi Status Active");
+    console.log("✅ Dashboard ready - Chart initialized with 20 points");
 </script>
 </body>
 </html>
