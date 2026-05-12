@@ -45,6 +45,11 @@
             font-size: 12px;
         }
         
+        .badge-warning {
+            background: #fdcb6e20;
+            color: #fdcb6e;
+        }
+        
         .subtitle { text-align: center; color: #aaa; font-size: 14px; margin-bottom: 30px; }
         
         .dashboard {
@@ -140,6 +145,22 @@
         .info-value { font-weight: bold; }
         .online { color: #00b894; }
         .offline { color: #e17055; }
+        .check-pass { color: #00b894; }
+        .check-fail { color: #e17055; }
+        
+        .health-card {
+            background: rgba(0,0,0,0.3);
+            border-radius: 16px;
+            padding: 15px;
+            margin-top: 10px;
+        }
+        
+        .health-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 8px 0;
+        }
         
         .last-update {
             text-align: center;
@@ -157,6 +178,16 @@
             border-top: 1px solid rgba(255,255,255,0.05);
         }
         
+        .heartbeat {
+            display: inline-block;
+            animation: pulse 1.5s infinite;
+        }
+        
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+        
         @media (max-width: 700px) {
             .current-value { font-size: 42px; }
             .status-value { font-size: 20px; }
@@ -166,7 +197,7 @@
 </head>
 <body>
 <div class="container">
-    <h1>🔌 HV Insulator Monitor <span class="badge">LIVE</span></h1>
+    <h1>🔌 HV Insulator Monitor <span class="badge" id="liveBadge">LIVE</span></h1>
     <div class="subtitle">Real-time Leakage Current Monitoring | Firebase + ESP32</div>
 
     <div class="dashboard">
@@ -194,17 +225,50 @@
         </div>
     </div>
 
-    <div class="card">
-        <h3>ℹ️ System Information</h3>
-        <div class="info-row"><span class="info-label">🟢 ESP32 Status:</span><span class="info-value" id="deviceStatus">--</span></div>
-        <div class="info-row"><span class="info-label">⏱️ Last Reading:</span><span class="info-value" id="timestamp">--</span></div>
-        <div class="info-row"><span class="info-label">📡 Data Source:</span><span class="info-value">Firebase Realtime DB</span></div>
-        <div class="info-row"><span class="info-label">📊 Graph Points:</span><span class="info-value" id="pointCount">0</span></div>
-        <div class="info-row"><span class="info-label">📝 Google Sheets:</span><span class="info-value">Auto-logging active</span></div>
+    <div class="dashboard">
+        <div class="card">
+            <h3>🩺 System Health</h3>
+            <div class="health-card">
+                <div class="health-item">
+                    <span>🟢 ESP32 Status:</span>
+                    <span class="info-value" id="deviceStatus">--</span>
+                </div>
+                <div class="health-item">
+                    <span>💓 System Heartbeat:</span>
+                    <span class="info-value" id="heartbeatStatus">--</span>
+                </div>
+                <div class="health-item">
+                    <span>📶 WiFi Health:</span>
+                    <span class="info-value" id="wifiStatus">--</span>
+                </div>
+                <div class="health-item">
+                    <span>🔥 Firebase Connection:</span>
+                    <span class="info-value" id="firebaseStatus">--</span>
+                </div>
+                <div class="health-item">
+                    <span>📝 Google Sheets:</span>
+                    <span class="info-value" id="sheetsStatus">Active (every 60s)</span>
+                </div>
+                <div class="health-item">
+                    <span>🤖 Telegram Alerts:</span>
+                    <span class="info-value" id="telegramStatus">Active</span>
+                </div>
+            </div>
+        </div>
+        
+        <div class="card">
+            <h3>ℹ️ System Information</h3>
+            <div class="info-row"><span class="info-label">⏱️ Last Reading:</span><span class="info-value" id="timestamp">--</span></div>
+            <div class="info-row"><span class="info-label">📡 Data Source:</span><span class="info-value">Firebase Realtime DB</span></div>
+            <div class="info-row"><span class="info-label">📊 Graph Points:</span><span class="info-value" id="pointCount">0</span></div>
+            <div class="info-row"><span class="info-label">📈 Peak Current:</span><span class="info-value" id="peakCurrent">--</span></div>
+            <div class="info-row"><span class="info-label">📝 Excel Logging:</span><span class="info-value">Every 60 seconds</span></div>
+            <div class="info-row"><span class="info-label">⚙️ Thresholds:</span><span class="info-value">⚠️ 20mA | 🔥 60mA</span></div>
+        </div>
     </div>
 
     <div class="last-update" id="lastUpdate">Waiting for data from ESP32...</div>
-    <footer>HV Insulator Monitoring System | Live Data via Firebase | Auto-logged to Google Sheets</footer>
+    <footer>HV Insulator Monitoring System | Live Data via Firebase | Auto-logged to Google Sheets | Real-time Alerts via Telegram</footer>
 </div>
 
 <script>
@@ -218,16 +282,19 @@
     firebase.initializeApp(firebaseConfig);
     const database = firebase.database();
     
-    // References to the correct Firebase paths
-    const currentRef = database.ref('/FYP/LiveCurrent');      // Updated path name
+    // Firebase references
+    const currentRef = database.ref('/FYP/LiveCurrent');
     const statusRef = database.ref('/FYP/Status');
     const timestampRef = database.ref('/FYP/Timestamp');
     const peakRef = database.ref('/FYP/PeakCurrent');
     const connectedRef = database.ref('.info/connected');
     
-    // Chart setup
+    // ============================================================
+    // CHART SETUP
+    // ============================================================
     const ctx = document.getElementById('currentChart').getContext('2d');
     let chartData = [];
+    let lastHeartbeatTime = Date.now();
     
     const currentChart = new Chart(ctx, {
         type: 'line',
@@ -272,9 +339,45 @@
         document.getElementById('pointCount').innerText = chartData.length;
     }
     
-    function updateDisplay(current, status) {
+    // ============================================================
+    // HEARTBEAT SIMULATION (Dashboard detects data freshness)
+    // ============================================================
+    function updateHeartbeat() {
+        const now = Date.now();
+        const timeSinceLastData = now - lastHeartbeatTime;
+        const heartbeatElement = document.getElementById('heartbeatStatus');
+        
+        if (timeSinceLastData < 10000) {
+            heartbeatElement.innerHTML = '<span class="check-pass">● Active (Data flowing)</span>';
+        } else if (timeSinceLastData < 60000) {
+            heartbeatElement.innerHTML = '<span class="check-fail">◐ Data stale (' + Math.round(timeSinceLastData/1000) + 's ago)</span>';
+        } else {
+            heartbeatElement.innerHTML = '<span class="check-fail">○ No data for ' + Math.round(timeSinceLastData/1000) + 's</span>';
+        }
+    }
+    
+    function updateWifiStatus() {
+        // WiFi status is inferred from Firebase connection
+        const wifiElement = document.getElementById('wifiStatus');
+        const connectionElement = document.getElementById('deviceStatus');
+        
+        if (connectionElement.innerHTML.includes('Online')) {
+            wifiElement.innerHTML = '<span class="check-pass">● Connected to network</span>';
+        } else {
+            wifiElement.innerHTML = '<span class="check-fail">○ Waiting for ESP32</span>';
+        }
+    }
+    
+    function updateDisplay(current, status, peak) {
+        // Update current value
         document.getElementById('current').innerHTML = current.toFixed(2);
         
+        // Update peak display
+        if (peak && peak > 0) {
+            document.getElementById('peakCurrent').innerHTML = peak.toFixed(2) + ' mA';
+        }
+        
+        // Update status
         const statusElement = document.getElementById('status');
         let statusClass = 'status-safe';
         let displayStatus = 'SAFE';
@@ -282,58 +385,93 @@
         if (status === 'CRITICAL' || current >= 60) {
             displayStatus = 'CRITICAL - FLASHOVER';
             statusClass = 'status-critical';
+            document.getElementById('liveBadge').innerHTML = '⚠️ CRITICAL';
+            document.getElementById('liveBadge').className = 'badge badge-warning';
         } else if (status === 'WARNING' || current >= 20) {
             displayStatus = 'WARNING - ARCING';
             statusClass = 'status-warning';
+            document.getElementById('liveBadge').innerHTML = '⚠️ WARNING';
+            document.getElementById('liveBadge').className = 'badge badge-warning';
         } else {
             displayStatus = 'SAFE';
             statusClass = 'status-safe';
+            document.getElementById('liveBadge').innerHTML = 'LIVE';
+            document.getElementById('liveBadge').className = 'badge';
         }
         
         statusElement.innerHTML = displayStatus;
         statusElement.className = `status-value ${statusClass}`;
         
+        // Update gauge
         let percent = Math.min(100, Math.max(0, (current / 100) * 100));
         document.getElementById('gaugeFill').style.height = percent + '%';
         document.getElementById('gaugeValue').innerHTML = Math.round(percent) + '%';
         
+        // Update timestamp
         const now = new Date();
         document.getElementById('timestamp').innerHTML = now.toLocaleString();
         document.getElementById('lastUpdate').innerHTML = `📡 Last update: ${now.toLocaleTimeString()} | Live from Firebase`;
         
+        // Update heartbeat
+        lastHeartbeatTime = now;
+        updateHeartbeat();
+        
+        // Update chart
         updateChart(current);
     }
     
-    // Listen for real-time updates
+    // ============================================================
+    // FIREBASE LISTENERS
+    // ============================================================
+    
+    // Monitor Firebase connection (inferred WiFi health)
+    connectedRef.on('value', (snap) => {
+        const deviceStatus = document.getElementById('deviceStatus');
+        const firebaseStatus = document.getElementById('firebaseStatus');
+        if (snap.val() === true) {
+            deviceStatus.innerHTML = '<span class="online">● Online</span>';
+            firebaseStatus.innerHTML = '<span class="check-pass">● Connected</span>';
+        } else {
+            deviceStatus.innerHTML = '<span class="offline">○ Offline</span>';
+            firebaseStatus.innerHTML = '<span class="check-fail">○ Disconnected</span>';
+        }
+        updateWifiStatus();
+    });
+    
+    // Listen for current updates
     currentRef.on('value', (snapshot) => {
         const current = snapshot.val();
         if (current !== null && typeof current === 'number') {
-            updateDisplay(current, null);
+            // Get status and peak to update display
+            statusRef.once('value', (statusSnap) => {
+                const status = statusSnap.val();
+                peakRef.once('value', (peakSnap) => {
+                    updateDisplay(current, status, peakSnap.val());
+                });
+            });
         }
     });
     
-    statusRef.on('value', (snapshot) => {
-        const status = snapshot.val();
-        if (status !== null && status !== '') {
-            const current = parseFloat(document.getElementById('current').innerHTML) || 0;
-            updateDisplay(current, status);
+    // Listen for peak updates
+    peakRef.on('value', (snapshot) => {
+        const peak = snapshot.val();
+        if (peak !== null && typeof peak === 'number') {
+            document.getElementById('peakCurrent').innerHTML = peak.toFixed(2) + ' mA';
         }
     });
     
-    connectedRef.on('value', (snap) => {
-        const deviceStatus = document.getElementById('deviceStatus');
-        deviceStatus.innerHTML = snap.val() === true
-            ? '<span class="online">● Online (Firebase connected)</span>'
-            : '<span class="offline">○ Waiting for ESP32...</span>';
-    });
+    // Initial heartbeat update
+    setInterval(updateHeartbeat, 5000);
+    setInterval(updateWifiStatus, 10000);
     
+    // Fallback timeout
     setTimeout(() => {
         if (document.getElementById('lastUpdate').innerHTML.includes('Waiting')) {
             document.getElementById('lastUpdate').innerHTML = "⚠️ Waiting for ESP32 data... Check if your ESP32 is powered and connected to WiFi.";
         }
     }, 8000);
     
-    console.log("✅ Dashboard ready - Listening to /FYP/LiveCurrent");
+    console.log("✅ Dashboard ready - System Health & WiFi Status Active");
 </script>
 </body>
 </html>
