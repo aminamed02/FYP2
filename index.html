@@ -99,7 +99,7 @@
             background: rgba(255,255,255,0.05);
             border-radius: 12px;
             padding: 10px;
-            width: 200px;
+            width: 220px;
             cursor: pointer;
             transition: transform 0.2s;
         }
@@ -136,18 +136,28 @@
             cursor: pointer;
         }
         
+        .capture-badge {
+            display: inline-block;
+            background: #e17055;
+            color: white;
+            font-size: 10px;
+            padding: 2px 6px;
+            border-radius: 10px;
+            margin-left: 8px;
+        }
+        
         @media (max-width: 768px) {
             .current-value { font-size: 42px; }
             .status-value { font-size: 20px; }
             h1 { font-size: 22px; }
-            .capture-item { width: 150px; }
+            .capture-item { width: 170px; }
         }
     </style>
 </head>
 <body>
 <div class="container">
     <h1>🔌 HV Insulator Monitor <span class="badge" id="liveBadge">LIVE</span></h1>
-    <div class="subtitle">Real-time Leakage Current Monitoring | Automatic Graph Capture</div>
+    <div class="subtitle">Real-time Leakage Current Monitoring | Smart Waveform Capture</div>
 
     <!-- Main Dashboard -->
     <div class="dashboard">
@@ -156,9 +166,9 @@
         <div class="card"><h3>📈 Current Level</h3><div class="gauge-container"><div class="gauge"><div class="gauge-fill" id="gaugeFill"></div></div><div class="gauge-value" id="gaugeValue">0%</div></div></div>
     </div>
 
-    <!-- Trend Chart - INCREASED TO 60 POINTS for complete waveform -->
+    <!-- Trend Chart - 100 points for complete waveform -->
     <div class="card" style="padding: 15px;">
-        <h3>📉 Live Current Trend (Last 60 Readings - Complete Waveform)</h3>
+        <h3>📉 Live Current Trend (Last 100 Readings - Full Waveform)</h3>
         <div class="chart-container">
             <canvas id="currentChart" width="800" height="300"></canvas>
         </div>
@@ -174,7 +184,7 @@
             <div class="info-row"><span class="info-label">🟢 ESP32 Status:</span><span class="info-value" id="deviceStatus">--</span></div>
             <div class="info-row"><span class="info-label">⏱️ Last Reading:</span><span class="info-value" id="timestamp">--</span></div>
             <div class="info-row"><span class="info-label">📈 Peak Current:</span><span class="info-value" id="peakCurrent">--</span></div>
-            <div class="info-row"><span class="info-label">📊 Graph Points:</span><span class="info-value" id="pointCount">0/60</span></div>
+            <div class="info-row"><span class="info-label">📊 Graph Points:</span><span class="info-value" id="pointCount">0/100</span></div>
             <div class="info-row"><span class="info-label">⚙️ Thresholds:</span><span class="info-value">⚠️ 30mA | 🔥 65mA</span></div>
         </div>
         <div class="card">
@@ -193,16 +203,16 @@
         </div>
     </div>
 
-    <!-- Captured Graphs History -->
+    <!-- Captured Waveforms History -->
     <div class="capture-history">
-        <h3>📸 Captured Waveforms (Automatic)</h3>
+        <h3>📸 Captured Waveforms (Full Spike Capture) <span class="capture-badge">Smart Capture</span></h3>
         <div id="capturedGraphs" class="capture-list">
-            <div style="text-align: center; color: #666; padding: 20px;">No captures yet</div>
+            <div style="text-align: center; color: #666; padding: 20px;">No captures yet. Waveform will capture 10 seconds before and after threshold.</div>
         </div>
     </div>
 
     <div class="last-update" id="lastUpdate">Waiting for data from ESP32...</div>
-    <footer>HV Insulator Monitoring System | 60-Point Waveform | Automatic Graph Capture</footer>
+    <footer>HV Insulator Monitoring System | Smart Waveform Capture | 100-Point Buffer</footer>
 </div>
 
 <!-- Image Modal -->
@@ -224,78 +234,153 @@
     const eventsRef = database.ref('/FYP/Events');
     const connectedRef = database.ref('.info/connected');
 
-    // State
-    let chartData = [];
-    let currentChart;
-    let eventsList = [];
-    let capturedGraphs = [];
-    let lastDataTime = Date.now();
-    let currentStatus = "SAFE";
-    let currentValue = 0;
-
-    // Chart initialization - 60 points for complete waveform
-    function initChart() {
-        const ctx = document.getElementById('currentChart').getContext('2d');
-        for (let i = 0; i < 60; i++) chartData.push(0.00);
+    // ========================================================
+    // SMART WAVEFORM CAPTURE - Rolling Buffer
+    // ========================================================
+    let rollingBuffer = [];      // Stores last 100 readings with timestamps
+    let captureScheduled = false;
+    let captureTimer = null;
+    let pendingCaptureType = null;
+    let pendingCaptureValue = 0;
+    
+    const BUFFER_SIZE = 100;     // Store 100 readings (about 100 seconds at 1 reading/sec)
+    const POST_CAPTURE_DURATION = 10000;  // Continue capturing for 10 seconds after threshold
+    
+    // Store reading in rolling buffer
+    function addToBuffer(value, timestamp) {
+        rollingBuffer.push({ value: value, timestamp: timestamp });
+        while (rollingBuffer.length > BUFFER_SIZE) {
+            rollingBuffer.shift();
+        }
+    }
+    
+    // Capture the entire waveform from buffer + future readings
+    async function captureFullWaveform(eventType, triggerValue, triggerTime) {
+        // Get the buffer snapshot (last ~100 seconds of data)
+        const bufferSnapshot = [...rollingBuffer];
         
-        currentChart = new Chart(ctx, {
-            type: 'line',
-            data: {
-                labels: chartData.map((_, i) => `${i+1}`),
-                datasets: [{
-                    label: 'Live Current (mA)',
-                    data: [...chartData],
-                    borderColor: '#00b894',
-                    backgroundColor: 'rgba(0,184,148,0.1)',
-                    borderWidth: 2,
-                    pointRadius: 2,
-                    pointBackgroundColor: '#00b894',
-                    tension: 0.2,
-                    fill: true
-                }]
-            },
-            options: {
-                responsive: true,
-                maintainAspectRatio: true,
-                plugins: {
-                    legend: { labels: { color: '#ccc' } },
-                    tooltip: { callbacks: { label: (ctx) => `${ctx.raw.toFixed(2)} mA` } }
-                },
-                scales: {
-                    y: { title: { display: true, text: 'Current (mA)', color: '#aaa' }, grid: { color: '#333' }, ticks: { color: '#ccc', stepSize: 10, min: 0, max: 100 } },
-                    x: { title: { display: true, text: 'Reading # (Most Recent →)', color: '#aaa' }, grid: { display: false }, ticks: { color: '#aaa', maxRotation: 45, autoSkip: true, maxTicksLimit: 12 } }
+        // We'll continue capturing for POST_CAPTURE_DURATION
+        const postCaptureData = [];
+        const stopTime = Date.now() + POST_CAPTURE_DURATION;
+        
+        return new Promise((resolve) => {
+            // Listen for new data for a short period
+            const dataListener = currentRef.on('value', (snapshot) => {
+                const current = snapshot.val();
+                if (current !== null && typeof current === 'number') {
+                    postCaptureData.push({
+                        value: current,
+                        timestamp: Date.now()
+                    });
+                }
+                
+                // Stop after duration
+                if (Date.now() >= stopTime) {
+                    currentRef.off('value', dataListener);
+                    
+                    // Combine buffer + post-capture data
+                    const fullWaveform = [...bufferSnapshot, ...postCaptureData];
+                    
+                    // Generate chart image
+                    generateWaveformImage(fullWaveform, eventType, triggerValue, triggerTime);
+                    resolve();
+                }
+            });
+        });
+    }
+    
+    // Generate image from waveform data
+    function generateWaveformImage(waveformData, eventType, triggerValue, triggerTime) {
+        // Create a temporary canvas
+        const tempCanvas = document.createElement('canvas');
+        const ctx = tempCanvas.getContext('2d');
+        tempCanvas.width = 800;
+        tempCanvas.height = 400;
+        
+        // Draw background
+        ctx.fillStyle = '#1a1a2e';
+        ctx.fillRect(0, 0, tempCanvas.width, tempCanvas.height);
+        
+        // Draw grid
+        ctx.strokeStyle = '#333';
+        ctx.lineWidth = 0.5;
+        for (let i = 0; i < 10; i++) {
+            const y = 50 + (i * 30);
+            ctx.beginPath();
+            ctx.moveTo(50, y);
+            ctx.lineTo(tempCanvas.width - 50, y);
+            ctx.stroke();
+        }
+        
+        // Draw axes
+        ctx.strokeStyle = '#666';
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(50, 50);
+        ctx.lineTo(50, tempCanvas.height - 50);
+        ctx.lineTo(tempCanvas.width - 50, tempCanvas.height - 50);
+        ctx.stroke();
+        
+        // Draw waveform
+        if (waveformData.length > 1) {
+            const step = (tempCanvas.width - 100) / (waveformData.length - 1);
+            const maxValue = Math.max(100, ...waveformData.map(d => d.value));
+            const minValue = 0;
+            const valueRange = maxValue - minValue;
+            
+            ctx.beginPath();
+            ctx.strokeStyle = eventType === 'CRITICAL' ? '#e17055' : '#fdcb6e';
+            ctx.lineWidth = 2;
+            
+            for (let i = 0; i < waveformData.length; i++) {
+                const x = 50 + (i * step);
+                const y = (tempCanvas.height - 50) - ((waveformData[i].value - minValue) / valueRange) * (tempCanvas.height - 100);
+                if (i === 0) {
+                    ctx.moveTo(x, y);
+                } else {
+                    ctx.lineTo(x, y);
                 }
             }
-        });
-        document.getElementById('pointCount').innerHTML = `0/60`;
-    }
-
-    function updateChart(value) {
-        if (isNaN(value) || value === null || !currentChart) return;
-        chartData.push(value);
-        while (chartData.length > 60) chartData.shift();
+            ctx.stroke();
+            
+            // Mark trigger point
+            const triggerIndex = waveformData.findIndex(d => d.value >= (eventType === 'CRITICAL' ? 65 : 30));
+            if (triggerIndex !== -1) {
+                const x = 50 + (triggerIndex * step);
+                const y = (tempCanvas.height - 50) - ((waveformData[triggerIndex].value - minValue) / valueRange) * (tempCanvas.height - 100);
+                ctx.fillStyle = '#ff0000';
+                ctx.beginPath();
+                ctx.arc(x, y, 5, 0, 2 * Math.PI);
+                ctx.fill();
+            }
+        }
         
-        currentChart.data.labels = chartData.map((_, i) => `${i+1}`);
-        currentChart.data.datasets[0].data = [...chartData];
-        currentChart.update();
-        document.getElementById('pointCount').innerHTML = `${chartData.length}/60`;
-    }
-
-    // Capture current chart as image
-    function captureChartAsImage(eventType, currentValue) {
-        const canvas = document.getElementById('currentChart');
-        if (!canvas) return;
+        // Draw labels
+        ctx.fillStyle = '#aaa';
+        ctx.font = '12px monospace';
+        ctx.fillText('Time (seconds)', tempCanvas.width / 2 - 40, tempCanvas.height - 20);
+        ctx.save();
+        ctx.translate(20, tempCanvas.height / 2);
+        ctx.rotate(-Math.PI / 2);
+        ctx.fillText('Current (mA)', -30, 0);
+        ctx.restore();
         
-        const imageData = canvas.toDataURL('image/png');
-        const now = new Date();
-        const timestamp = now.toLocaleString();
+        // Draw title
+        ctx.fillStyle = '#00b894';
+        ctx.font = 'bold 16px Arial';
+        ctx.fillText(`${eventType} EVENT - ${triggerValue.toFixed(1)} mA at ${new Date(triggerTime).toLocaleTimeString()}`, 50, 30);
         
+        // Convert to image
+        const imageData = tempCanvas.toDataURL('image/png');
+        
+        // Save capture
         const captureRecord = {
             id: Date.now(),
-            timestamp: timestamp,
+            timestamp: new Date().toLocaleString(),
             type: eventType,
-            current: currentValue,
-            imageData: imageData
+            current: triggerValue,
+            imageData: imageData,
+            points: waveformData.length
         };
         
         capturedGraphs.unshift(captureRecord);
@@ -309,13 +394,90 @@
         link.click();
         
         updateCapturedGraphsDisplay();
-        document.getElementById('captureCount').innerHTML = capturedGraphs.length;
-        console.log(`📸 Waveform captured: ${eventType} at ${currentValue.toFixed(2)} mA`);
-        showNotification(`📸 ${eventType} waveform captured!`);
+        console.log(`📸 Full waveform captured: ${eventType} | ${waveformData.length} points | Trigger: ${triggerValue.toFixed(2)} mA`);
+        showNotification(`📸 ${eventType} waveform captured (${waveformData.length} points)`);
+    }
+    
+    // Schedule waveform capture when threshold is triggered
+    function scheduleWaveformCapture(eventType, currentValue) {
+        if (captureScheduled) return;
+        
+        captureScheduled = true;
+        pendingCaptureType = eventType;
+        pendingCaptureValue = currentValue;
+        const triggerTime = Date.now();
+        
+        console.log(`🎯 Threshold triggered: ${eventType} at ${currentValue.toFixed(2)} mA - Capturing waveform...`);
+        showNotification(`🎯 ${eventType} detected! Capturing waveform...`);
+        
+        // Capture the waveform after a short delay to get the full spike
+        setTimeout(() => {
+            captureFullWaveform(pendingCaptureType, pendingCaptureValue, triggerTime);
+            captureScheduled = false;
+        }, 3000);  // Wait 3 seconds to capture the peak and recovery
+    }
+    
+    // Chart and state
+    let chartData = [];
+    let currentChart;
+    let eventsList = [];
+    let capturedGraphs = [];
+    let lastDataTime = Date.now();
+    let currentStatus = "SAFE";
+    let currentValue = 0;
+    let lastTriggeredStatus = "";
+    
+    // Chart initialization - 100 points for complete waveform
+    function initChart() {
+        const ctx = document.getElementById('currentChart').getContext('2d');
+        for (let i = 0; i < 100; i++) chartData.push(0.00);
+        
+        currentChart = new Chart(ctx, {
+            type: 'line',
+            data: {
+                labels: chartData.map((_, i) => `${i+1}`),
+                datasets: [{
+                    label: 'Live Current (mA)',
+                    data: [...chartData],
+                    borderColor: '#00b894',
+                    backgroundColor: 'rgba(0,184,148,0.1)',
+                    borderWidth: 2,
+                    pointRadius: 1.5,
+                    pointBackgroundColor: '#00b894',
+                    tension: 0.2,
+                    fill: true
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: true,
+                animation: false,
+                plugins: {
+                    legend: { labels: { color: '#ccc' } },
+                    tooltip: { callbacks: { label: (ctx) => `${ctx.raw.toFixed(2)} mA` } }
+                },
+                scales: {
+                    y: { title: { display: true, text: 'Current (mA)', color: '#aaa' }, grid: { color: '#333' }, ticks: { color: '#ccc', stepSize: 10, min: 0, max: 100 } },
+                    x: { title: { display: true, text: 'Reading # (Most Recent →)', color: '#aaa' }, grid: { display: false }, ticks: { color: '#aaa', maxRotation: 45, autoSkip: true, maxTicksLimit: 12 } }
+                }
+            }
+        });
+        document.getElementById('pointCount').innerHTML = `0/100`;
+    }
+    
+    function updateChart(value) {
+        if (isNaN(value) || value === null || !currentChart) return;
+        chartData.push(value);
+        while (chartData.length > 100) chartData.shift();
+        
+        currentChart.data.labels = chartData.map((_, i) => `${i+1}`);
+        currentChart.data.datasets[0].data = [...chartData];
+        currentChart.update();
+        document.getElementById('pointCount').innerHTML = `${chartData.length}/100`;
     }
     
     function manualCapture() {
-        captureChartAsImage("MANUAL", currentValue);
+        captureFullWaveform("MANUAL", currentValue, Date.now());
     }
     
     function showNotification(message) {
@@ -331,20 +493,20 @@
         if (!container) return;
         
         if (capturedGraphs.length === 0) {
-            container.innerHTML = '<div style="text-align: center; color: #666; padding: 20px;">No captures yet. Waveforms will appear automatically on WARNING/CRITICAL events.</div>';
+            container.innerHTML = '<div style="text-align: center; color: #666; padding: 20px;">No captures yet. Waveform will capture 10 seconds before and after threshold.</div>';
             return;
         }
         
         let html = '';
         capturedGraphs.forEach(cap => {
-            const typeClass = cap.type === 'CRITICAL' ? 'event-critical' : (cap.type === 'WARNING' ? 'event-warning' : '');
             html += `
                 <div class="capture-item" onclick="showFullImage('${cap.imageData}')">
                     <img src="${cap.imageData}" class="capture-thumb">
                     <div class="capture-info">
-                        <div>${cap.type}</div>
+                        <div style="font-weight: bold; ${cap.type === 'CRITICAL' ? 'color:#e17055' : (cap.type === 'WARNING' ? 'color:#fdcb6e' : 'color:#00b894')}">${cap.type}</div>
                         <div>${cap.current.toFixed(1)} mA</div>
                         <div style="font-size: 9px;">${cap.timestamp}</div>
+                        <div style="font-size: 9px; color:#888;">${cap.points} points</div>
                     </div>
                 </div>
             `;
@@ -366,8 +528,7 @@
             updateCapturedGraphsDisplay();
         }
     }
-
-    // Load event history from Firebase
+    
     function loadEventHistory() {
         eventsRef.orderByKey().limitToLast(50).on('value', (snapshot) => {
             const events = [];
@@ -421,8 +582,7 @@
     function toggleEventDetails(element) {
         element.classList.toggle('active');
     }
-
-    // Check ESP32 status based on last data received
+    
     function checkESP32Status() {
         const timeSinceLastData = Date.now() - lastDataTime;
         const deviceStatus = document.getElementById('deviceStatus');
@@ -435,9 +595,14 @@
             deviceStatus.innerHTML = '<span class="offline">○ Offline - No data for ' + Math.round(timeSinceLastData/1000) + 's</span>';
         }
     }
-
+    
     function updateDisplay(current, status, peak) {
         currentValue = current;
+        const now = Date.now();
+        
+        // Add to rolling buffer for waveform capture
+        addToBuffer(current, now);
+        
         document.getElementById('current').innerHTML = current.toFixed(2);
         if (peak && peak > 0) document.getElementById('peakCurrent').innerHTML = peak.toFixed(2) + ' mA';
         
@@ -463,10 +628,10 @@
         statusEl.innerHTML = displayStatus;
         statusEl.className = `status-value ${statusClass}`;
         
-        // Check for new WARNING/CRITICAL event
+        // Smart trigger: Capture waveform when threshold is crossed
         if ((status === 'CRITICAL' && currentStatus !== 'CRITICAL') || 
             (status === 'WARNING' && currentStatus !== 'WARNING')) {
-            captureChartAsImage(status, current);
+            scheduleWaveformCapture(status, current);
         }
         
         currentStatus = status;
@@ -475,14 +640,14 @@
         document.getElementById('gaugeFill').style.height = percent + '%';
         document.getElementById('gaugeValue').innerHTML = Math.round(percent) + '%';
         
-        const now = new Date();
-        document.getElementById('timestamp').innerHTML = now.toLocaleString();
-        document.getElementById('lastUpdate').innerHTML = `📡 Last update: ${now.toLocaleTimeString()}`;
+        const time = new Date();
+        document.getElementById('timestamp').innerHTML = time.toLocaleString();
+        document.getElementById('lastUpdate').innerHTML = `📡 Last update: ${time.toLocaleTimeString()}`;
         lastDataTime = now;
         updateChart(current);
         checkESP32Status();
     }
-
+    
     // Firebase listeners
     connectedRef.on('value', (snap) => {
         const firebaseConnected = snap.val() === true;
@@ -508,11 +673,9 @@
             document.getElementById('peakCurrent').innerHTML = peak.toFixed(2) + ' mA';
         }
     });
-
-    // Check ESP32 status every 5 seconds
-    setInterval(checkESP32Status, 5000);
     
     // Initialize
+    setInterval(checkESP32Status, 5000);
     initChart();
     loadEventHistory();
     loadSavedCaptures();
@@ -532,7 +695,7 @@
     style.textContent = `@keyframes fadeOut { 0% { opacity: 1; } 70% { opacity: 1; } 100% { opacity: 0; display: none; } }`;
     document.head.appendChild(style);
     
-    console.log("✅ Dashboard ready - 60-point waveform, auto-capture active");
+    console.log("✅ Dashboard ready - Smart waveform capture active (100-point buffer)");
 </script>
 </body>
 </html>
