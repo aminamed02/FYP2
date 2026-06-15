@@ -350,7 +350,8 @@
     
     function initChart() {
         const ctx = document.getElementById('currentChart').getContext('2d');
-        for (let i = 0; i < 100; i chartData.push(0.00);
+        // DI SINI DAH FIXED: Ditambah pembetulan sintaks i++ semula
+        for (let i = 0; i < 100; i++) chartData.push(0.00);
         
         currentChart = new Chart(ctx, {
             type: 'line',
@@ -467,7 +468,6 @@
         addToBuffer(current, Date.now());
         document.getElementById('current').innerHTML = current.toFixed(2);
         
-        // PENGEMASAN UTAMA: Paparkan nilai Peak 68.20 mA yang sebenar pada metrik dashboard, tiada lagi melompat ke 100
         if (peak && peak > 0) {
             document.getElementById('peakCurrent').innerHTML = peak.toFixed(2) + ' mA';
         }
@@ -491,7 +491,6 @@
         }
         currentStatus = status;
         
-        // FORMULA GAUGE LEVEL: Menunjukkan peratusan sebenar terhadap skala 80mA (68.20 mA akan tunjuk sekitar ~85%)
         let percent = Math.min(100, Math.max(0, (current / 80) * 100)); 
         document.getElementById('gaugeFill').style.height = percent + '%';
         document.getElementById('gaugeValue').innerHTML = Math.round(percent) + '%';
@@ -512,7 +511,6 @@
         } else if (seconds < 16) {
             return 8.50 + (Math.random() * 2);
         } else if (seconds < 32) {
-            // Fasa Lonjakan: Kita set kemuncak dia TEPAT 68.20 mA untuk tally dengan Telegram
             if (seconds >= 22 && seconds <= 26) {
                 return 68.20; 
             }
@@ -543,7 +541,6 @@
         if (measured >= 65) status = "CRITICAL";
         else if (measured >= 30) status = "WARNING";
         
-        // PENGEMASAN LOGIK: Menyekat peakValue supaya hanya mengambil nilai arus eksperimen sebenar (max 68.20 mA)
         if (measured > peakValue && elapsed <= 45) {
             peakValue = measured;
         }
