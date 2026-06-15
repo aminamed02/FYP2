@@ -19,8 +19,33 @@
             color: #eee;
         }
         .container { max-width: 1400px; margin: 0 auto; }
-        h1 { text-align: center; margin-bottom: 10px; color: #e17055; font-size: 28px; }
-        .subtitle { text-align: center; color: #aaa; margin-bottom: 30px; font-size: 14px; }
+        
+        /* DI SINI DIUBAH: Tajuk utama mengikut skema warna putih/silver dalam gambar */
+        h1 { 
+            text-align: center; 
+            margin-bottom: 10px; 
+            color: #ffffff; 
+            font-size: 28px;
+            font-weight: 700;
+            letter-spacing: 0.5px;
+            text-shadow: 0 2px 4px rgba(0,0,0,0.3);
+        }
+        .subtitle { text-align: center; color: #a0aec0; margin-bottom: 30px; font-size: 14px; }
+        
+        /* DI SINI DIUBAH: Badge LIVE warna hijau neon glowing */
+        .badge-live {
+            background: #00b894;
+            color: #fff;
+            font-size: 14px;
+            padding: 4px 12px;
+            border-radius: 8px;
+            margin-left: 10px;
+            font-weight: bold;
+            display: inline-block;
+            vertical-align: middle;
+            box-shadow: 0 0 12px rgba(0, 184, 148, 0.6);
+            letter-spacing: 1px;
+        }
         
         .dashboard {
             display: grid;
@@ -145,7 +170,7 @@
 </head>
 <body>
 <div class="container">
-    <h1>🔌 HV Insulator Monitor <span class="badge" id="liveBadge">LIVE</span></h1>
+    <h1>🔌 HV Insulator Monitor <span class="badge-live" id="liveBadge">LIVE</span></h1>
     <div class="subtitle">Real-time Leakage Current Monitoring | Smart Waveform Capture</div>
 
     <div class="dashboard">
@@ -350,7 +375,6 @@
     
     function initChart() {
         const ctx = document.getElementById('currentChart').getContext('2d');
-        // DI SINI DAH FIXED: Ditambah pembetulan sintaks i++ semula
         for (let i = 0; i < 100; i++) chartData.push(0.00);
         
         currentChart = new Chart(ctx, {
@@ -477,10 +501,13 @@
         
         if (status === 'CRITICAL' || current >= 65) {
             displayStatus = 'CRITICAL - FLASHOVER'; statusClass = 'status-critical'; badge.innerHTML = '⚠️ CRITICAL';
+            badge.style.background = '#e17055'; badge.style.boxShadow = '0 0 12px rgba(225, 112, 85, 0.6)';
         } else if (status === 'WARNING' || current >= 30) {
             displayStatus = 'WARNING - ARCING'; statusClass = 'status-warning'; badge.innerHTML = '⚠️ WARNING';
+            badge.style.background = '#fdcb6e'; badge.style.boxShadow = '0 0 12px rgba(253, 203, 110, 0.6)';
         } else {
             displayStatus = 'SAFE'; statusClass = 'status-safe'; badge.innerHTML = 'LIVE';
+            badge.style.background = '#00b894'; badge.style.boxShadow = '0 0 12px rgba(0, 184, 148, 0.6)';
         }
         statusEl.innerHTML = displayStatus; statusEl.className = `status-value ${statusClass}`;
         
