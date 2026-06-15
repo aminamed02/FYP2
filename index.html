@@ -20,19 +20,17 @@
         }
         .container { max-width: 1400px; margin: 0 auto; }
         
-        /* DI SINI DIUBAH: Tajuk utama mengikut skema warna putih/silver dalam gambar */
+        /* DI SINI: Tulisan tajuk disetkan warna hijau (#00b894) terus */
         h1 { 
             text-align: center; 
             margin-bottom: 10px; 
-            color: #ffffff; 
+            color: #00b894; 
             font-size: 28px;
-            font-weight: 700;
-            letter-spacing: 0.5px;
-            text-shadow: 0 2px 4px rgba(0,0,0,0.3);
+            font-weight: bold;
         }
-        .subtitle { text-align: center; color: #a0aec0; margin-bottom: 30px; font-size: 14px; }
+        .subtitle { text-align: center; color: #aaa; margin-bottom: 30px; font-size: 14px; }
         
-        /* DI SINI DIUBAH: Badge LIVE warna hijau neon glowing */
+        /* DI SINI: Lencana LIVE kekal hijau */
         .badge-live {
             background: #00b894;
             color: #fff;
@@ -43,8 +41,6 @@
             font-weight: bold;
             display: inline-block;
             vertical-align: middle;
-            box-shadow: 0 0 12px rgba(0, 184, 148, 0.6);
-            letter-spacing: 1px;
         }
         
         .dashboard {
@@ -497,17 +493,14 @@
         }
         
         const statusEl = document.getElementById('status');
-        let statusClass = 'status-safe', displayStatus = 'SAFE', badge = document.getElementById('liveBadge');
+        let statusClass = 'status-safe', displayStatus = 'SAFE';
         
         if (status === 'CRITICAL' || current >= 65) {
-            displayStatus = 'CRITICAL - FLASHOVER'; statusClass = 'status-critical'; badge.innerHTML = '⚠️ CRITICAL';
-            badge.style.background = '#e17055'; badge.style.boxShadow = '0 0 12px rgba(225, 112, 85, 0.6)';
+            displayStatus = 'CRITICAL - FLASHOVER'; statusClass = 'status-critical';
         } else if (status === 'WARNING' || current >= 30) {
-            displayStatus = 'WARNING - ARCING'; statusClass = 'status-warning'; badge.innerHTML = '⚠️ WARNING';
-            badge.style.background = '#fdcb6e'; badge.style.boxShadow = '0 0 12px rgba(253, 203, 110, 0.6)';
+            displayStatus = 'WARNING - ARCING'; statusClass = 'status-warning';
         } else {
-            displayStatus = 'SAFE'; statusClass = 'status-safe'; badge.innerHTML = 'LIVE';
-            badge.style.background = '#00b894'; badge.style.boxShadow = '0 0 12px rgba(0, 184, 148, 0.6)';
+            displayStatus = 'SAFE'; statusClass = 'status-safe';
         }
         statusEl.innerHTML = displayStatus; statusEl.className = `status-value ${statusClass}`;
         
